@@ -17,7 +17,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-pyinstaller --noconfirm --clean --windowed --name Ecole main.py
+pyinstaller --noconfirm --clean ecole.spec
 echo.
-echo Build done: dist\Ecole\Ecole.exe
+echo Build done: dist\Ecole.exe
 pause
