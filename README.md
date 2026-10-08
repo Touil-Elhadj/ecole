@@ -88,3 +88,8 @@ python main.py
 ```
 
 متغير البيئة `ECOLE_DATA_DIR` يغيّر مكان البيانات (مفيد للتجربة).
+
+## فيديو الشرح
+
+فيديو تعليمي (8 دقائق) يشرح كل إمكانيات البرنامج بلقطات شاشة: [docs/tutorial.mp4](docs/tutorial.mp4)،
+ونص التعليق الصوتي بالتوقيت: [docs/tutorial_narration.txt](docs/tutorial_narration.txt).
