@@ -364,6 +364,8 @@ class Store:
     _BALANCE_SQL = """
         COALESCE((SELECT SUM(p.sessions) FROM payments p
                    WHERE p.student_id = s.id AND p.cancelled = 0), 0)
+      + COALESCE((SELECT SUM(b.sessions) FROM balance_adjustments b
+                   WHERE b.student_id = s.id), 0)
       - COALESCE((SELECT COUNT(*) FROM attendance a
                    WHERE a.student_id = s.id AND a.present = 1), 0)
     """
@@ -424,6 +426,17 @@ class Store:
             self._log("حفظ تلميذ", name)
         return student_id
 
+    def add_balance_adjustment(self, student_id: int, sessions: int, reason: str) -> None:
+        """يضيف (أو يُنقص إن كان سالباً) حصصاً لرصيد التلميذ دون تسجيل مبلغ مقبوض."""
+        if sessions == 0:
+            return
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO balance_adjustments(student_id, sessions, reason, user_id) "
+                "VALUES (?, ?, ?, ?)",
+                (student_id, sessions, reason, self.user.id if self.user else None))
+            self._log("تعديل الرصيد", f"تلميذ {student_id}: {sessions:+d} ({reason})")
+
     def student_groups(self, student_id: int):
         return self.conn.execute(
             self._GROUP_SELECT +
@@ -472,7 +485,15 @@ class Store:
                 "amount": 0, "change": -1 if a["present"] else 0, "cancelled": False,
                 "receipt_no": None,
             })
-        events.sort(key=lambda e: e["date"])
+        for b in self.conn.execute(
+                "SELECT * FROM balance_adjustments WHERE student_id = ?", (student_id,)):
+            events.append({
+                "date": b["created_at"], "label": f"تعديل الرصيد - {b['reason']}",
+                "amount": 0, "change": b["sessions"], "cancelled": False, "receipt_no": None,
+            })
+        # عند تساوي الوقت: تعديل الرصيد ثم الدفع ثم الحضور.
+        order = {"تعديل": 0, "دفع": 1}
+        events.sort(key=lambda e: (e["date"], order.get(e["label"].split(" ", 1)[0], 2)))
         running = 0
         for e in events:
             running += e["change"]

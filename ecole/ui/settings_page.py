@@ -3,9 +3,11 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox,
-    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
-    QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
+    QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
+
+from .. import excel_io
 
 from .common import (
     RED, cell, confirm, error, fill_table, guarded, info, make_table, money, selected_id,
@@ -359,14 +361,104 @@ class AuditTab(QWidget):
                                 for a in self.store.audit_log()])
 
 
+class ReportDialog(QDialog):
+    """عرض نتيجة التحقق أو الاستيراد (قائمة طويلة قابلة للنسخ)."""
+
+    def __init__(self, title: str, text: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(720, 480)
+        view = QPlainTextEdit(text)
+        view.setReadOnly(True)
+        close = QPushButton("إغلاق")
+        close.clicked.connect(self.accept)
+        layout = QVBoxLayout(self)
+        layout.addWidget(view)
+        layout.addWidget(close)
+
+
+class ImportTab(QWidget):
+    imported = Signal()
+
+    def __init__(self, store, backup_callback, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.backup_callback = backup_callback
+        note = QLabel(
+            "لإدخال الوضع الحالي للأكاديمية دفعة واحدة:\n"
+            "1) احفظ قالب Excel الفارغ وسلّمه لمن سيملؤه.\n"
+            "2) يُملأ القالب: الأساتذة، الأفواج، التلاميذ وأفواجهم ورصيدهم الحالي من الحصص.\n"
+            "3) استورد الملف هنا. يتحقق البرنامج من كل البيانات أولاً، ولا يضيف شيئاً إذا "
+            "وُجد خطأ، ويأخذ نسخة احتياطية قبل الاستيراد.\n\n"
+            "يمكن استيراد نفس الملف مرة ثانية بعد إضافة أسطر جديدة: الموجود مسبقاً لا يتكرر.")
+        note.setWordWrap(True)
+        save = QPushButton("📄 حفظ قالب Excel فارغ...")
+        save.clicked.connect(self._save_template)
+        load = QPushButton("📥 استيراد ملف Excel...")
+        load.setObjectName("primary")
+        load.clicked.connect(self._import)
+        bar = QHBoxLayout()
+        bar.addWidget(save)
+        bar.addWidget(load)
+        bar.addStretch()
+        layout = QVBoxLayout(self)
+        layout.addWidget(note)
+        layout.addLayout(bar)
+        layout.addStretch()
+
+    def refresh(self):
+        pass
+
+    def _save_template(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "حفظ القالب", "قالب_بيانات_الأكاديمية.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        try:
+            excel_io.write_template(path)
+        except OSError as exc:
+            error(self, f"تعذّر حفظ الملف (هل هو مفتوح في Excel؟):\n{exc}")
+            return
+        info(self, f"تم حفظ القالب:\n{path}")
+
+    def _import(self):
+        path, _ = QFileDialog.getOpenFileName(self, "اختر ملف Excel", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        check = excel_io.import_workbook(self.store, path, dry_run=True)
+        if not check.ok:
+            ReportDialog("أخطاء في الملف", "لم يُستورد أي شيء. صحّح الأخطاء التالية في ملف "
+                         "Excel ثم أعد المحاولة:\n\n- " + "\n- ".join(check.errors),
+                         self).exec()
+            return
+        if not confirm(self, "الملف سليم. هل تريد استيراد البيانات الآن؟"):
+            return
+        try:
+            self.backup_callback()
+        except OSError as exc:
+            if not confirm(self, f"تعذّر أخذ نسخة احتياطية:\n{exc}\n\nمتابعة الاستيراد؟"):
+                return
+        report = excel_io.import_workbook(self.store, path)
+        text = "تمت إضافة:\n" + report.summary()
+        if report.errors:
+            text = "حدث خطأ أثناء الاستيراد:\n- " + "\n- ".join(report.errors) + "\n\n" + text
+        if report.warnings:
+            text += "\n\nملاحظات:\n- " + "\n- ".join(report.warnings)
+        ReportDialog("نتيجة الاستيراد", text, self).exec()
+        self.imported.emit()
+
+
 class SettingsPage(QWidget):
-    def __init__(self, store, data_dir, parent=None):
+    def __init__(self, store, data_dir, backup_callback=None, parent=None):
         super().__init__(parent)
         self.general = GeneralTab(store)
         self.lists = ListsTab(store)
         self.users = UsersTab(store)
         self.backup = BackupTab(store, data_dir)
         self.audit = AuditTab(store)
+        self.importer = ImportTab(store, backup_callback or (lambda: []))
         self.tabs = QTabWidget()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -374,6 +466,7 @@ class SettingsPage(QWidget):
         self.tabs.addTab(scroll, "عام والأسعار")
         self.tabs.addTab(self.lists, "المستويات والمواد")
         self.tabs.addTab(self.users, "المستخدمون")
+        self.tabs.addTab(self.importer, "استيراد من Excel")
         self.tabs.addTab(self.backup, "النسخ الاحتياطي")
         self.tabs.addTab(self.audit, "سجل العمليات")
         self.tabs.currentChanged.connect(lambda _: self.refresh())
@@ -386,5 +479,6 @@ class SettingsPage(QWidget):
         super().showEvent(event)
 
     def refresh(self):
-        for tab in (self.general, self.lists, self.users, self.backup, self.audit):
+        for tab in (self.general, self.lists, self.users, self.importer, self.backup,
+                    self.audit):
             tab.refresh()

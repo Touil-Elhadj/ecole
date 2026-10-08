@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
         ]
         if is_admin:
             self.pages["reports"] = ReportsPage(store)
-            self.pages["settings"] = SettingsPage(store, data_dir)
+            self.pages["settings"] = SettingsPage(store, data_dir, backup_callback)
             nav_items += [("reports", "📊  التقارير"), ("settings", "⚙  الإعدادات")]
             backup_tab = self.pages["settings"].backup
             backup_tab.backup_requested.connect(self._backup_now)

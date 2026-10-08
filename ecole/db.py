@@ -122,6 +122,18 @@ CREATE TABLE IF NOT EXISTS teacher_payouts (
     UNIQUE (teacher_id, period)
 );
 
+-- تعديلات الرصيد بدون دفع نقدي (مثل الرصيد الافتتاحي عند الاستيراد من Excel).
+-- قد تكون موجبة (حصص مدفوعة مسبقاً) أو سالبة (دَين سابق).
+CREATE TABLE IF NOT EXISTS balance_adjustments (
+    id         INTEGER PRIMARY KEY,
+    student_id INTEGER NOT NULL REFERENCES students(id),
+    sessions   INTEGER NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    user_id    INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_adjustments_student ON balance_adjustments(student_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id      INTEGER PRIMARY KEY,
     at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
