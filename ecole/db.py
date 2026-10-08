@@ -122,6 +122,28 @@ CREATE TABLE IF NOT EXISTS teacher_payouts (
     UNIQUE (teacher_id, period)
 );
 
+-- فترات الحساب: تُفتح عند «بداية الحساب» وتُغلق يوم دفع رواتب الأساتذة (كل 4 أسابيع تقريباً).
+-- الفترة المفتوحة حالياً هي التي end_date فيها فارغ.
+CREATE TABLE IF NOT EXISTS pay_periods (
+    id         INTEGER PRIMARY KEY,
+    start_date TEXT NOT NULL,
+    end_date   TEXT,
+    closed_at  TEXT,
+    user_id    INTEGER REFERENCES users(id)
+);
+
+-- ما دُفع لكل أستاذ عند إغلاق فترة (صورة ثابتة للحساب يوم الدفع).
+CREATE TABLE IF NOT EXISTS period_payouts (
+    period_id   INTEGER NOT NULL REFERENCES pay_periods(id),
+    teacher_id  INTEGER NOT NULL REFERENCES teachers(id),
+    lessons     INTEGER NOT NULL,
+    attendances INTEGER NOT NULL,
+    total       INTEGER NOT NULL,
+    academy     INTEGER NOT NULL,
+    amount      INTEGER NOT NULL,
+    PRIMARY KEY (period_id, teacher_id)
+);
+
 -- تعديلات الرصيد بدون دفع نقدي (مثل الرصيد الافتتاحي عند الاستيراد من Excel).
 -- قد تكون موجبة (حصص مدفوعة مسبقاً) أو سالبة (دَين سابق).
 CREATE TABLE IF NOT EXISTS balance_adjustments (

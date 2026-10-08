@@ -694,9 +694,8 @@ class Store:
         end = date(year + (month == 12), month % 12 + 1, 1)
         return start.isoformat(), date.fromordinal(end.toordinal() - 1).isoformat()
 
-    def teachers_statement(self, period: str) -> list[dict]:
-        """كشف شهري لكل الأساتذة. period بصيغة YYYY-MM."""
-        start, end = self.month_range(period)
+    def teachers_summary(self, date_from: str, date_to: str) -> list[dict]:
+        """حصيلة كل أستاذ بين تاريخين: الحصص، الحضور، المجموع، نصيب الأكاديمية، صافي الأستاذ."""
         rows = self.conn.execute("""
             SELECT t.id, t.full_name,
                    COUNT(DISTINCT le.id) AS lessons,
@@ -706,20 +705,136 @@ class Store:
               JOIN groups g ON g.teacher_id = t.id
               JOIN lessons le ON le.group_id = g.id AND le.lesson_date BETWEEN ? AND ?
               LEFT JOIN attendance a ON a.lesson_id = le.id
-             GROUP BY t.id ORDER BY t.full_name""", (start, end)).fetchall()
-        payouts = {r["teacher_id"]: r for r in self.conn.execute(
-            "SELECT * FROM teacher_payouts WHERE period = ?", (period,))}
+             GROUP BY t.id ORDER BY t.full_name""", (date_from, date_to)).fetchall()
         result = []
         for r in rows:
             academy, net = self.split_income(r["total"])
-            payout = payouts.get(r["id"])
             result.append({
                 "teacher_id": r["id"], "teacher_name": r["full_name"], "lessons": r["lessons"],
                 "attendances": r["attendances"], "total": r["total"], "academy": academy,
-                "net": net, "paid": payout["amount"] if payout else None,
-                "paid_at": payout["paid_at"] if payout else None,
+                "net": net,
             })
         return result
+
+    def teachers_statement(self, period: str) -> list[dict]:
+        """كشف شهري (شهر ميلادي) لكل الأساتذة. period بصيغة YYYY-MM."""
+        start, end = self.month_range(period)
+        payouts = {r["teacher_id"]: r for r in self.conn.execute(
+            "SELECT * FROM teacher_payouts WHERE period = ?", (period,))}
+        result = self.teachers_summary(start, end)
+        for r in result:
+            payout = payouts.get(r["teacher_id"])
+            r["paid"] = payout["amount"] if payout else None
+            r["paid_at"] = payout["paid_at"] if payout else None
+        return result
+
+    # ------------------------------------------------- فترات الحساب (الرواتب)
+    PERIOD_WEEKS = 4
+
+    @staticmethod
+    def _add_days(day: str, n: int) -> str:
+        return date.fromordinal(date.fromisoformat(day).toordinal() + n).isoformat()
+
+    def _period_dict(self, row) -> dict:
+        p = dict(row)
+        last = p["end_date"] or max(today_str(), p["start_date"])
+        p["days"] = (date.fromisoformat(last) - date.fromisoformat(p["start_date"])).days + 1
+        p["is_open"] = p["end_date"] is None
+        p["due"] = p["is_open"] and p["days"] > self.PERIOD_WEEKS * 7
+        return p
+
+    def current_period(self) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM pay_periods WHERE end_date IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+        return self._period_dict(row) if row else None
+
+    def list_periods(self) -> list[dict]:
+        return [self._period_dict(r) for r in self.conn.execute(
+            "SELECT * FROM pay_periods ORDER BY start_date DESC, id DESC")]
+
+    def get_period(self, period_id: int) -> dict | None:
+        row = self.conn.execute("SELECT * FROM pay_periods WHERE id = ?", (period_id,)).fetchone()
+        return self._period_dict(row) if row else None
+
+    def start_first_period(self, start_date: str) -> int:
+        """أول «بداية حساب»: تُستعمل مرة واحدة عندما لا توجد أي فترة."""
+        self._require_admin()
+        if self.conn.execute("SELECT COUNT(*) FROM pay_periods").fetchone()[0]:
+            raise ServiceError("الحساب بدأ مسبقاً. استعمل «بداية الحساب» لإغلاق الفترة الحالية.")
+        with self.conn:
+            pid = self.conn.execute(
+                "INSERT INTO pay_periods(start_date, user_id) VALUES (?, ?)",
+                (start_date, self.user.id if self.user else None)).lastrowid
+            self._log("بداية الحساب", f"من {start_date}")
+        return pid
+
+    def close_period(self, end_date: str) -> int:
+        """يغلق الفترة الحالية في end_date (يدخل فيها)، يسجّل رواتب الأساتذة، ويفتح فترة جديدة."""
+        self._require_admin()
+        period = self.current_period()
+        if period is None:
+            raise ServiceError("لا توجد فترة مفتوحة.")
+        if end_date < period["start_date"]:
+            raise ServiceError("تاريخ نهاية الفترة قبل تاريخ بدايتها.")
+        summary = self.teachers_summary(period["start_date"], end_date)
+        with self.conn:
+            for r in summary:
+                self.conn.execute(
+                    "INSERT INTO period_payouts(period_id, teacher_id, lessons, attendances, "
+                    "total, academy, amount) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (period["id"], r["teacher_id"], r["lessons"], r["attendances"], r["total"],
+                     r["academy"], r["net"]))
+            self.conn.execute(
+                "UPDATE pay_periods SET end_date = ?, closed_at = ? WHERE id = ?",
+                (end_date, now_str(), period["id"]))
+            self.conn.execute(
+                "INSERT INTO pay_periods(start_date, user_id) VALUES (?, ?)",
+                (self._add_days(end_date, 1), self.user.id if self.user else None))
+            total = sum(r["net"] for r in summary)
+            self._log("دفع رواتب الأساتذة وبداية حساب جديد",
+                      f"الفترة {period['start_date']} إلى {end_date}: {total} دج")
+        return period["id"]
+
+    def reopen_last_period(self) -> None:
+        """تراجع عن آخر «بداية حساب»: تُدمج الفترة الحالية مع السابقة وتُلغى رواتبها المسجلة."""
+        self._require_admin()
+        current = self.current_period()
+        last = self.conn.execute(
+            "SELECT * FROM pay_periods WHERE end_date IS NOT NULL ORDER BY end_date DESC LIMIT 1"
+        ).fetchone()
+        if current is None or last is None:
+            raise ServiceError("لا توجد فترة مغلقة للتراجع عنها.")
+        with self.conn:
+            self.conn.execute("DELETE FROM period_payouts WHERE period_id = ?", (last["id"],))
+            self.conn.execute("DELETE FROM pay_periods WHERE id = ?", (current["id"],))
+            self.conn.execute(
+                "UPDATE pay_periods SET end_date = NULL, closed_at = NULL WHERE id = ?",
+                (last["id"],))
+            self._log("تراجع عن دفع الرواتب", f"الفترة من {last['start_date']}")
+
+    def period_for_date(self, day: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM pay_periods WHERE start_date <= ? AND (end_date IS NULL OR end_date >= ?) "
+            "ORDER BY id DESC LIMIT 1", (day, day)).fetchone()
+        return self._period_dict(row) if row else None
+
+    def period_weeks(self, period: dict) -> list[dict]:
+        """أسابيع الفترة: الأسبوع 1 = الأيام 1–7 من بداية الفترة، وهكذا."""
+        weeks = max(self.PERIOD_WEEKS, -(-period["days"] // 7))
+        out = []
+        for i in range(weeks):
+            start = self._add_days(period["start_date"], 7 * i)
+            end = self._add_days(start, 6)
+            if period["end_date"] and start > period["end_date"]:
+                break
+            if period["end_date"] and end > period["end_date"]:
+                end = period["end_date"]
+            out.append({"number": i + 1, "start": start, "end": end})
+        return out
+
+    def period_payouts(self, period_id: int) -> dict[int, dict]:
+        return {r["teacher_id"]: dict(r) for r in self.conn.execute(
+            "SELECT * FROM period_payouts WHERE period_id = ?", (period_id,))}
 
     def teacher_detail(self, teacher_id: int, period: str):
         """تفاصيل حصص أستاذ خلال شهر."""

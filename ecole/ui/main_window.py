@@ -14,6 +14,7 @@ from .dashboard import DashboardPage
 from .groups import GroupsPage
 from .login import ChangePasswordDialog
 from .payments import PaymentsPage
+from .payroll import PayrollPage
 from .reports import ReportsPage
 from .settings_page import SettingsPage
 from .students import StudentsPage
@@ -47,9 +48,11 @@ class MainWindow(QMainWindow):
             ("teachers", "👨‍🏫  الأساتذة"),
         ]
         if is_admin:
+            self.pages["payroll"] = PayrollPage(store)
             self.pages["reports"] = ReportsPage(store)
             self.pages["settings"] = SettingsPage(store, data_dir, backup_callback)
-            nav_items += [("reports", "📊  التقارير"), ("settings", "⚙  الإعدادات")]
+            nav_items += [("payroll", "💰  الحصيلة والرواتب"), ("reports", "📊  التقارير"),
+                          ("settings", "⚙  الإعدادات")]
             backup_tab = self.pages["settings"].backup
             backup_tab.backup_requested.connect(self._backup_now)
             backup_tab.restore_requested.connect(self.restore_callback)

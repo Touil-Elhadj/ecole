@@ -64,6 +64,9 @@ class DashboardPage(QWidget):
         head.addStretch()
         head.addWidget(self.date_label)
         layout.addLayout(head)
+        self.period_label = QLabel()
+        self.period_label.setWordWrap(True)
+        layout.addWidget(self.period_label)
         layout.addLayout(grid)
         layout.addLayout(quick)
         layout.addWidget(QLabel("حصص اليوم المسجّلة (نقرتان لفتح الحضور):"))
@@ -76,6 +79,20 @@ class DashboardPage(QWidget):
     def refresh(self):
         data = self.store.dashboard()
         self.date_label.setText(QLocale().toString(QDate.currentDate(), "dddd d MMMM yyyy"))
+        period = self.store.current_period()
+        if period is None:
+            self.period_label.setVisible(False)
+        else:
+            week = (period["days"] - 1) // 7 + 1
+            text = (f"فترة الحساب الحالية: من {period['start_date']} — الأسبوع {week} من "
+                    f"{self.store.PERIOD_WEEKS} (اليوم {period['days']})")
+            style = "font-weight: bold; color: #1f3a5f"
+            if period["due"]:
+                text += "   ⚠ حان موعد دفع رواتب الأساتذة (الحصيلة والرواتب ← بداية الحساب)"
+                style = "font-weight: bold; color: #c62828"
+            self.period_label.setText(text)
+            self.period_label.setStyleSheet(style)
+            self.period_label.setVisible(True)
         for key, card in self.cards.items():
             value = data[key]
             card.value.setText(money(value) if key in ("cash", "academy_share") else str(value))

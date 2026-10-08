@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 
 from .. import printing
 from .common import (
-    GREEN, RED, cell, confirm, date_edit, error, fill_table, guarded, iso, make_table,
+    RED, cell, date_edit, error, fill_table, iso, make_table,
     money, money_cell, selected_id, title_label,
 )
 
@@ -83,18 +83,13 @@ class TeachersTab(QWidget):
         self.month = month_edit()
         self.month.dateChanged.connect(self.refresh)
         self.table = make_table(["الأستاذ", "الحصص", "الحضور", "المجموع", "نصيب الأكاديمية",
-                                 "صافي الأستاذ", "حالة الدفع"])
+                                 "صافي الأستاذ"])
         self.table.doubleClicked.connect(self._detail)
         self.summary = QLabel()
         self.summary.setStyleSheet("font-weight: bold; font-size: 12pt")
 
         detail = QPushButton("التفاصيل")
         detail.clicked.connect(self._detail)
-        pay = QPushButton("✔ تسجيل دفع المستحقات")
-        pay.setObjectName("primary")
-        pay.clicked.connect(self._pay)
-        unpay = QPushButton("إلغاء تسجيل الدفع")
-        unpay.clicked.connect(self._unpay)
         print_btn = QPushButton("🖨 طباعة الكشف")
         print_btn.clicked.connect(self._print)
 
@@ -102,7 +97,8 @@ class TeachersTab(QWidget):
         top.addWidget(QLabel("الشهر:"))
         top.addWidget(self.month)
         top.addStretch()
-        for b in (detail, pay, unpay, print_btn):
+        # دفع الرواتب صار في «الحصيلة والرواتب» (كل 4 أسابيع)، هذا الكشف للاطلاع فقط.
+        for b in (detail, print_btn):
             top.addWidget(b)
         layout = QVBoxLayout(self)
         layout.addLayout(top)
@@ -118,8 +114,6 @@ class TeachersTab(QWidget):
             money_cell(r["total"]),
             money_cell(r["academy"]),
             money_cell(r["net"], bold=True),
-            cell(f"مدفوع ({r['paid_at'][:10]})" if r["paid"] is not None else "غير مدفوع",
-                 color=GREEN if r["paid"] is not None else RED),
         ] for r in self.rows])
         total = sum(r["total"] for r in self.rows)
         academy = sum(r["academy"] for r in self.rows)
@@ -138,38 +132,16 @@ class TeachersTab(QWidget):
         if r:
             TeacherDetailDialog(self.store, r["teacher_id"], period_of(self.month), self).exec()
 
-    def _pay(self):
-        r = self._row()
-        if r is None:
-            return
-        if r["paid"] is not None:
-            error(self, "مستحقات هذا الشهر مسجلة كمدفوعة مسبقاً.")
-            return
-        if confirm(self, f"تسجيل دفع {money(r['net'])} للأستاذ {r['teacher_name']} "
-                         f"عن شهر {period_of(self.month)}؟"):
-            _, ok = guarded(self, self.store.record_teacher_payout, r["teacher_id"],
-                            period_of(self.month), r["net"])
-            if ok:
-                self.refresh()
-
-    def _unpay(self):
-        r = self._row()
-        if r and r["paid"] is not None and confirm(self, "إلغاء تسجيل دفع مستحقات هذا الشهر؟"):
-            guarded(self, self.store.cancel_teacher_payout, r["teacher_id"],
-                    period_of(self.month))
-            self.refresh()
-
     def _print(self):
         rows = [[r["teacher_name"], r["lessons"], r["attendances"], money(r["total"]),
-                 money(r["academy"]), money(r["net"]),
-                 "مدفوع" if r["paid"] is not None else ""] for r in self.rows]
+                 money(r["academy"]), money(r["net"])] for r in self.rows]
         total = sum(r["total"] for r in self.rows)
         academy = sum(r["academy"] for r in self.rows)
         html = printing.table_html(
             "كشف مستحقات الأساتذة", f"شهر {period_of(self.month)}",
-            ["الأستاذ", "الحصص", "الحضور", "المجموع", "نصيب الأكاديمية", "صافي الأستاذ",
-             "الحالة"], rows, self.store.settings(),
-            ["المجموع", "", "", money(total), money(academy), money(total - academy), ""])
+            ["الأستاذ", "الحصص", "الحضور", "المجموع", "نصيب الأكاديمية", "صافي الأستاذ"],
+            rows, self.store.settings(),
+            ["المجموع", "", "", money(total), money(academy), money(total - academy)])
         printing.print_html(self, html)
 
 
@@ -293,7 +265,7 @@ class ReportsPage(QWidget):
     def __init__(self, store, parent=None):
         super().__init__(parent)
         self.tabs = QTabWidget()
-        self.tabs.addTab(TeachersTab(store), "كشف الأساتذة الشهري")
+        self.tabs.addTab(TeachersTab(store), "كشف الأساتذة (شهر ميلادي)")
         self.tabs.addTab(SummaryTab(store), "ملخص الأكاديمية")
         self.tabs.addTab(DebtorsTab(store), "التلاميذ المدينون")
         self.tabs.currentChanged.connect(lambda _: self.tabs.currentWidget().refresh())
