@@ -61,6 +61,9 @@
 
 ## التثبيت على Windows 10
 
+**الأسهل:** نزّل البرنامج الجاهز [release/Ecole.exe](release/Ecole.exe) (ملف واحد، لا يحتاج تثبيتاً)
+وانقر عليه مرتين. للبناء من الكود بنفسك اتبع الخطوات التالية:
+
 1. ثبّت **Python 3.11 أو أحدث** من [python.org](https://www.python.org/downloads/windows/)
    مع تأشير خيار **Add Python to PATH**.
 2. حمّل هذا المجلد على الحاسوب.
